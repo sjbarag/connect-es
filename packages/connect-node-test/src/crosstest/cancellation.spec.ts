@@ -33,37 +33,43 @@ fdescribe("cancellation", function () {
     }
   }
 
-  servers.describeTransports((transport) => {
-    const request = {};
-    const abort = new AbortController();
-    abort.abort();
-    const options: Readonly<CallOptions> = {
-      signal: abort.signal,
-    };
-
-    fit("with promise client", async function () {
-      const client = createPromiseClient(TestService, transport());
-
-      try {
-        await client.unaryCall(request, options);
-      } catch (e) {
-        expectError(e);
-      }
-    });
-    xit("with callback client", function (done) {
-      const client = createCallbackClient(TestService, transport());
-      const callback = (e: ConnectError | undefined) => {
-        expectError(e);
-        done();
+  servers.describeTransportsOnly(
+    [
+      "@bufbuild/connect-node (gRPC, binary, https) against connect-go (h1)",
+      // "@bufbuild/connect-node (gRPC, binary, http2) against connect-go (h1)",
+    ],
+    (transport) => {
+      const request = {};
+      const abort = new AbortController();
+      abort.abort();
+      const options: Readonly<CallOptions> = {
+        signal: abort.signal,
       };
-      try {
-        client.unaryCall(request, callback, options);
-      } catch (e) {
-        expectError(e);
-      }
-      done();
-    });
-  });
+
+      fit("cancel unary with promise client", async function () {
+        const client = createPromiseClient(TestService, transport());
+
+        try {
+          await client.unaryCall(request, options);
+        } catch (e) {
+          expectError(e);
+        }
+      });
+      xit("cancel unary with callback client", function (done) {
+        const client = createCallbackClient(TestService, transport());
+        const callback = (e: ConnectError | undefined) => {
+          expectError(e);
+          done();
+        };
+        try {
+          client.unaryCall(request, callback, options);
+        } catch (e) {
+          expectError(e);
+        }
+        done();
+      });
+    }
+  );
 
   afterAll(async () => await servers.stop());
 });

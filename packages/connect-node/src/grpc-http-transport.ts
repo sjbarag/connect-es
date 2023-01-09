@@ -425,7 +425,7 @@ function makeNodeRequest(options: NodeRequestOptions) {
     });
 
     request.on("error", (err) => {
-      reject(`request failed ${String(err)}`);
+      reject(err);
     });
 
     request.on("response", (res) => {
