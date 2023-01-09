@@ -1,4 +1,4 @@
-// Copyright 2021-2022 Buf Technologies, Inc.
+// Copyright 2021-2023 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,7 +31,9 @@ describe("ping_pong", () => {
       "@bufbuild/connect-node (Connect, binary, https) against @bufbuild/connect-node (h1 + tls)",
       "@bufbuild/connect-node (Connect, JSON, https) against @bufbuild/connect-node (h1 + tls)",
       "@bufbuild/connect-node (Connect, binary, http) against connect-go (h1)",
+      "@bufbuild/connect-node (Connect, binary, http, gzip) against connect-go (h1)",
       "@bufbuild/connect-node (Connect, JSON, http) against connect-go (h1)",
+      "@bufbuild/connect-node (Connect, JSON, http, gzip) against connect-go (h1)",
       "@bufbuild/connect-node (gRPC, binary, http) against @bufbuild/connect-node (h1)",
       "@bufbuild/connect-node (gRPC, JSON, http) against @bufbuild/connect-node (h1)",
       "@bufbuild/connect-node (gRPC, JSON, https) against @bufbuild/connect-node (h1 + tls)",
@@ -44,6 +46,15 @@ describe("ping_pong", () => {
       "@bufbuild/connect-node (gRPC-web, binary, https) against @bufbuild/connect-node (h1 + tls)",
       "@bufbuild/connect-node (gRPC-web, binary, https) against connect-go (h1)",
       "@bufbuild/connect-node (gRPC-web, JSON, https) against connect-go (h1)",
+      "@bufbuild/connect-node (gRPC-web, JSON, http, gzip) against @bufbuild/connect-node (h1)",
+      "@bufbuild/connect-node (gRPC-web, binary, http, gzip) against @bufbuild/connect-node (h1)",
+      "@bufbuild/connect-node (gRPC, JSON, http, gzip) against @bufbuild/connect-node (h1)",
+      "@bufbuild/connect-node (gRPC, binary, http, gzip) against @bufbuild/connect-node (h1)",
+      "@bufbuild/connect-node (gRPC-web, JSON, http, gzip) against connect-go (h1)",
+      "@bufbuild/connect-node (gRPC, binary, http, gzip) against connect-go (h1)",
+      "@bufbuild/connect-node (gRPC, JSON, http, gzip) against connect-go (h1)",
+      "@bufbuild/connect-node (Connect, JSON, http, gzip) against @bufbuild/connect-node (h1)",
+      "@bufbuild/connect-node (Connect, binary, http, gzip) against @bufbuild/connect-node (h1)",
     ],
     (transport) => {
       it("with promise client", async function () {

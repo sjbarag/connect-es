@@ -1,4 +1,4 @@
-// Copyright 2021-2022 Buf Technologies, Inc.
+// Copyright 2021-2023 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,6 +27,13 @@ const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const brotliCompress = promisify(zlib.brotliCompress);
 const brotliDecompress = promisify(zlib.brotliDecompress);
+
+/**
+ * compressedFlag indicates that the data in a EnvelopedMessage is
+ * compressed. It has the same meaning in the gRPC-Web, gRPC-HTTP2,
+ * and Connect protocols.
+ */
+export const compressedFlag = 0b00000001;
 
 export const compressionGzip: Compression = {
   name: "gzip",

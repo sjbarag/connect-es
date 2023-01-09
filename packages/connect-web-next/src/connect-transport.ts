@@ -1,4 +1,4 @@
-// Copyright 2021-2022 Buf Technologies, Inc.
+// Copyright 2021-2023 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,14 +34,8 @@ import type {
 import {
   appendHeaders,
   Code,
-  connectCreateRequestHeader,
-  connectEndStreamFlag,
-  connectEndStreamFromJson,
   ConnectError,
-  connectErrorFromJson,
   connectErrorFromReason,
-  connectTrailerDemux,
-  connectValidateResponse,
   createClientMethodSerializers,
   createEnvelopeReadableStream,
   createMethodUrl,
@@ -50,6 +44,14 @@ import {
   runStreaming,
   runUnary,
 } from "@bufbuild/connect-core";
+import {
+  connectCreateRequestHeader,
+  connectEndStreamFlag,
+  connectEndStreamFromJson,
+  connectErrorFromJson,
+  connectTrailerDemux,
+  connectValidateResponse,
+} from "@bufbuild/connect-core/protocol-connect";
 import type { ReadableStreamReadResultLike } from "./lib.dom.streams.js";
 import { assertFetchApi } from "./assert-fetch-api.js";
 import { defer } from "./defer.js";
