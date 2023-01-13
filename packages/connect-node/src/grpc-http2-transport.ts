@@ -14,6 +14,8 @@
 
 import {
   Code,
+  compressedFlag,
+  Compression,
   ConnectError,
   createClientMethodSerializers,
   createMethodUrl,
@@ -28,11 +30,11 @@ import {
   UnaryResponse,
 } from "@bufbuild/connect-core";
 import {
-  grpcCreateRequestHeader,
-  grpcValidateResponse,
-  grpcValidateTrailer,
+  createRequestHeaderWithCompression,
+  validateResponseWithCompression,
+  validateTrailer,
 } from "@bufbuild/connect-core/protocol-grpc";
-import {
+import type {
   AnyMessage,
   BinaryReadOptions,
   BinaryWriteOptions,
@@ -40,7 +42,6 @@ import {
   JsonWriteOptions,
   Message,
   MethodInfo,
-  MethodKind,
   PartialMessage,
   ServiceType,
 } from "@bufbuild/protobuf";
@@ -56,15 +57,8 @@ import {
 } from "./private/io.js";
 import { webHeaderToNodeHeaders } from "./private/web-header-to-node-headers.js";
 import { connectErrorFromNodeReason } from "./private/node-error.js";
-import {
-  compressedFlag,
-  Compression,
-  compressionBrotli,
-  compressionGzip,
-} from "./compression.js";
+import { compressionBrotli, compressionGzip } from "./compression.js";
 import { validateReadMaxBytesOption } from "./private/validate-read-max-bytes-option.js";
-
-const messageFlag = 0b00000000;
 
 /**
  * Options used to configure the gRPC-web transport.
@@ -156,13 +150,12 @@ export function createGrpcHttp2Transport(
             method,
             url: createMethodUrl(options.baseUrl, service, method),
             init: {},
-            header: grpcCreateRequestHeaderWithCompression(
-              method.kind,
+            header: createRequestHeaderWithCompression(
               useBinaryFormat,
               timeoutMs,
               header,
-              acceptCompression.map((c) => c.name),
-              options.sendCompression?.name
+              acceptCompression,
+              options.sendCompression
             ),
             message: normalize(message),
             signal: signal ?? new AbortController().signal,
@@ -182,7 +175,7 @@ export function createGrpcHttp2Transport(
                 s.on("error", (err) => reject(err));
               });
 
-            let flag = messageFlag;
+            let flag = 0;
             let body = serialize(req.message);
             if (
               options.sendCompression !== undefined &&
@@ -190,9 +183,6 @@ export function createGrpcHttp2Transport(
             ) {
               body = await options.sendCompression.compress(body);
               flag = compressedFlag;
-              req.header.set("Grpc-Encoding", options.sendCompression.name);
-            } else {
-              req.header.delete("Grpc-Encoding");
             }
 
             const stream = session.request(
@@ -213,7 +203,7 @@ export function createGrpcHttp2Transport(
             await end(stream);
 
             const [responseCode, responseHeader] = await headersPromise;
-            const { compression } = grpcValidateResponseWithCompression(
+            const { compression } = validateResponseWithCompression(
               useBinaryFormat,
               acceptCompression,
               responseCode,
@@ -226,7 +216,7 @@ export function createGrpcHttp2Transport(
             }
 
             const trailer = await trailerPromise;
-            grpcValidateTrailer(trailer);
+            validateTrailer(trailer);
 
             if (messageResult.done) {
               throw "premature eof";
@@ -291,13 +281,12 @@ export function createGrpcHttp2Transport(
             mode: "cors",
           },
           signal: signal ?? new AbortController().signal,
-          header: grpcCreateRequestHeaderWithCompression(
-            method.kind,
+          header: createRequestHeaderWithCompression(
             useBinaryFormat,
             timeoutMs,
             header,
-            acceptCompression.map((c) => c.name),
-            options.sendCompression?.name
+            acceptCompression,
+            options.sendCompression
           ),
         },
         async (req: StreamingRequest<I, O>) => {
@@ -335,11 +324,10 @@ export function createGrpcHttp2Transport(
                     "cannot send, stream is already closed"
                   );
                 }
-                let flags = messageFlag;
+                let flags = 0;
                 let body = serialize(normalize(message));
-
                 if (
-                  options.sendCompression &&
+                  options.sendCompression !== undefined &&
                   body.length >= compressMinBytes
                 ) {
                   flags = flags | compressedFlag;
@@ -364,7 +352,7 @@ export function createGrpcHttp2Transport(
               },
               async read(): Promise<ReadableStreamReadResultLike<O>> {
                 const [responseStatus, responseHeader] = await headerPromise;
-                const { compression } = grpcValidateResponseWithCompression(
+                const { compression } = validateResponseWithCompression(
                   useBinaryFormat,
                   acceptCompression,
                   responseStatus,
@@ -374,7 +362,7 @@ export function createGrpcHttp2Transport(
                   const result = await readEnvelope(stream);
                   if (result.done) {
                     const trailer = await trailerPromise;
-                    grpcValidateTrailer(trailer);
+                    validateTrailer(trailer);
                     responseTrailer.resolve(trailer);
                     return {
                       done: true,
@@ -411,56 +399,5 @@ export function createGrpcHttp2Transport(
         options.interceptors
       );
     },
-  };
-}
-
-export function grpcCreateRequestHeaderWithCompression(
-  methodKind: MethodKind,
-  useBinaryFormat: boolean,
-  timeoutMs: number | undefined,
-  userProvidedHeaders: HeadersInit | undefined,
-  acceptCompression: string[],
-  sendCompression: string | undefined
-): Headers {
-  const result = grpcCreateRequestHeader(
-    useBinaryFormat,
-    timeoutMs,
-    userProvidedHeaders
-  );
-  let acceptEncodingField = "Accept-Encoding";
-  if (methodKind !== MethodKind.Unary) {
-    acceptEncodingField = "GRPC-" + acceptEncodingField;
-    if (sendCompression != undefined) {
-      result.set("Grpc-Encoding", sendCompression);
-    }
-  }
-  if (acceptCompression.length > 0) {
-    result.set(acceptEncodingField, acceptCompression.join(","));
-  }
-  return result;
-}
-
-export function grpcValidateResponseWithCompression(
-  useBinaryFormat: boolean,
-  acceptCompression: Compression[],
-  status: number,
-  headers: Headers
-): { compression: Compression | undefined } {
-  grpcValidateResponse(useBinaryFormat, status, headers);
-
-  let compression: Compression | undefined;
-  const encodingField = "Grpc-Encoding";
-  const encoding = headers.get(encodingField);
-  if (encoding !== null && encoding.toLowerCase() !== "identity") {
-    compression = acceptCompression.find((c) => c.name === encoding);
-    if (!compression) {
-      throw new ConnectError(
-        `unsupported response encoding "${encoding}"`,
-        Code.InvalidArgument
-      );
-    }
-  }
-  return {
-    compression,
   };
 }

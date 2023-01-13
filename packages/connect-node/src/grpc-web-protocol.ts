@@ -14,18 +14,22 @@
 
 import {
   Code,
+  compressedFlag,
+  Compression,
   ConnectError,
   connectErrorFromReason,
   encodeEnvelope,
 } from "@bufbuild/connect-core";
 import {
-  grpcParseTimeout,
-  grpcSetTrailerStatus,
-} from "@bufbuild/connect-core/protocol-grpc";
-import {
-  grpcWebParseContentType,
-  grpcWebTrailerFlag,
-  grpcWebTrailerSerialize,
+  parseTimeout,
+  setTrailerStatus,
+  headerEncoding,
+  headerAcceptEncoding,
+  headerContentType,
+  headerTimeout,
+  parseContentType,
+  trailerFlag,
+  trailerSerialize,
 } from "@bufbuild/connect-core/protocol-grpc-web";
 import {
   BinaryReadOptions,
@@ -46,18 +50,9 @@ import {
 import type * as http from "http";
 import type * as http2 from "http2";
 import { end, endWithHttpStatus, readEnvelope, write } from "./private/io.js";
-import {
-  compressedFlag,
-  Compression,
-  compressionBrotli,
-  compressionGzip,
-} from "./compression.js";
+import { compressionBrotli, compressionGzip } from "./compression.js";
 import { compressionNegotiate } from "./private/compression-negotiate.js";
 import { validateReadMaxBytesOption } from "./private/validate-read-max-bytes-option.js";
-
-const headerEncoding = "Grpc-Encoding";
-const headerAcceptEncoding = "Grpc-Accept-Encoding";
-const grpcWebTimeoutHeader = "Grpc-Timeout";
 
 /**
  * Options for creating a gRPC-web Protocol instance.
@@ -85,7 +80,7 @@ export function createGrpcWebProtocol(
     compressionBrotli,
   ];
   return {
-    supportsMediaType: (type) => !!grpcWebParseContentType(type),
+    supportsMediaType: (type) => !!parseContentType(type),
 
     createHandler<I extends Message<I>, O extends Message<O>>(
       spec: ImplSpec<I, O>
@@ -94,10 +89,7 @@ export function createGrpcWebProtocol(
         case MethodKind.Unary:
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = grpcWebParseContentType(
-              req.headers["content-type"] ?? null
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -116,18 +108,15 @@ export function createGrpcWebProtocol(
             const context: HandlerContext = {
               method: spec.method,
               service: spec.service,
-              requestHeader: nodeHeaderToWebHeader(req.headers),
-              responseHeader: grpcWebCreateResponseHeader(type.binary),
+              requestHeader,
+              responseHeader: createResponseHeader(type.binary),
               responseTrailer: new Headers(),
             };
-            const timeout = grpcParseTimeout(
-              requestHeader.get(grpcWebTimeoutHeader)
-            );
 
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithGrpcWebTrailer(res, context, timeout);
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithGrpcWebTrailer(
@@ -218,10 +207,7 @@ export function createGrpcWebProtocol(
         case MethodKind.ServerStreaming: {
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = grpcWebParseContentType(
-              req.headers["content-type"] ?? null
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -241,17 +227,14 @@ export function createGrpcWebProtocol(
               method: spec.method,
               service: spec.service,
               requestHeader,
-              responseHeader: grpcWebCreateResponseHeader(type.binary),
+              responseHeader: createResponseHeader(type.binary),
               responseTrailer: new Headers(),
             };
-            const timeout = grpcParseTimeout(
-              requestHeader.get(grpcWebTimeoutHeader)
-            );
 
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithGrpcWebTrailer(res, context, timeout);
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithGrpcWebTrailer(
@@ -307,21 +290,6 @@ export function createGrpcWebProtocol(
                 new ConnectError("Missing input message", Code.Internal)
               );
             }
-            if (
-              requestCompression === undefined &&
-              inputResult.value.flags !== 0
-            ) {
-              return await endWithGrpcWebTrailer(
-                res,
-                context,
-                new ConnectError(
-                  `Unexpected input flags ${inputResult.value.flags.toString(
-                    2
-                  )}`,
-                  Code.Internal
-                )
-              );
-            }
             const flags = inputResult.value.flags;
             let data = inputResult.value.data;
             if ((flags & compressedFlag) === compressedFlag) {
@@ -363,10 +331,7 @@ export function createGrpcWebProtocol(
         case MethodKind.ClientStreaming: {
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = grpcWebParseContentType(
-              req.headers["content-type"] ?? null
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -385,18 +350,15 @@ export function createGrpcWebProtocol(
             const context: HandlerContext = {
               method: spec.method,
               service: spec.service,
-              requestHeader: nodeHeaderToWebHeader(req.headers),
-              responseHeader: grpcWebCreateResponseHeader(type.binary),
+              requestHeader,
+              responseHeader: createResponseHeader(type.binary),
               responseTrailer: new Headers(),
             };
-            const timeout = grpcParseTimeout(
-              requestHeader.get(grpcWebTimeoutHeader)
-            );
 
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithGrpcWebTrailer(res, context, timeout);
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithGrpcWebTrailer(
@@ -449,21 +411,6 @@ export function createGrpcWebProtocol(
                 const result = await readEnvelope(req);
                 if (result.done) {
                   break;
-                }
-                if (
-                  requestCompression === undefined &&
-                  result.value.flags !== 0
-                ) {
-                  return await endWithGrpcWebTrailer(
-                    res,
-                    context,
-                    new ConnectError(
-                      `Unexpected input flags ${result.value.flags.toString(
-                        2
-                      )}`,
-                      Code.Internal
-                    )
-                  );
                 }
                 const flags = result.value.flags;
                 let data = result.value.data;
@@ -507,10 +454,7 @@ export function createGrpcWebProtocol(
         case MethodKind.BiDiStreaming: {
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = grpcWebParseContentType(
-              req.headers["content-type"] ?? null
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -530,17 +474,14 @@ export function createGrpcWebProtocol(
               method: spec.method,
               service: spec.service,
               requestHeader,
-              responseHeader: grpcWebCreateResponseHeader(type.binary),
+              responseHeader: createResponseHeader(type.binary),
               responseTrailer: new Headers(),
             };
-            const timeout = grpcParseTimeout(
-              requestHeader.get(grpcWebTimeoutHeader)
-            );
 
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithGrpcWebTrailer(res, context, timeout);
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithGrpcWebTrailer(
@@ -593,21 +534,6 @@ export function createGrpcWebProtocol(
                 const result = await readEnvelope(req);
                 if (result.done) {
                   break;
-                }
-                if (
-                  requestCompression === undefined &&
-                  result.value.flags !== 0
-                ) {
-                  return await endWithGrpcWebTrailer(
-                    res,
-                    context,
-                    new ConnectError(
-                      `Unexpected input flags ${result.value.flags.toString(
-                        2
-                      )}`,
-                      Code.Internal
-                    )
-                  );
                 }
                 const flags = result.value.flags;
                 let data = result.value.data;
@@ -658,7 +584,7 @@ export function createGrpcWebProtocol(
   };
 }
 
-function grpcWebCreateResponseHeader(useBinaryFormat: boolean): Headers {
+function createResponseHeader(useBinaryFormat: boolean): Headers {
   let type = "application/grpc-web+";
   type += useBinaryFormat ? "proto" : "json";
   return new Headers({
@@ -674,8 +600,8 @@ async function endWithGrpcWebTrailer(
   if (!res.headersSent) {
     res.writeHead(200, webHeaderToNodeHeaders(context.responseHeader));
   }
-  grpcSetTrailerStatus(context.responseTrailer, error);
-  const trailerBytes = grpcWebTrailerSerialize(context.responseTrailer);
-  await write(res, encodeEnvelope(grpcWebTrailerFlag, trailerBytes));
+  setTrailerStatus(context.responseTrailer, error);
+  const trailerBytes = trailerSerialize(context.responseTrailer);
+  await write(res, encodeEnvelope(trailerFlag, trailerBytes));
   await end(res);
 }

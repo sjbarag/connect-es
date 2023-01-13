@@ -18,14 +18,25 @@ import {
   ConnectError,
   encodeEnvelope,
   connectErrorFromReason,
+  Compression,
+  compressedFlag,
 } from "@bufbuild/connect-core";
 import {
-  connectCodeToHttpStatus,
-  connectEndStreamFlag,
-  connectEndStreamToJson,
-  connectErrorToJson,
-  connectParseContentType,
-  connectParseTimeout,
+  codeToHttpStatus,
+  endStreamFlag,
+  endStreamToJson,
+  errorToJson,
+  parseContentType,
+  parseTimeout,
+  headerUnaryEncoding,
+  headerStreamEncoding,
+  headerUnaryAcceptEncoding,
+  headerStreamAcceptEncoding,
+  headerContentType,
+  headerTimeout,
+  headerProtocolVersion,
+  protocolVersion,
+  trailerMux,
 } from "@bufbuild/connect-core/protocol-connect";
 import {
   BinaryReadOptions,
@@ -43,7 +54,6 @@ import {
   nodeHeaderToWebHeader,
   webHeaderToNodeHeaders,
 } from "./private/web-header-to-node-headers.js";
-import { connectTrailerMux } from "./private/connect-trailer-mux.js";
 import type * as http from "http";
 import type * as http2 from "http2";
 import {
@@ -54,17 +64,10 @@ import {
   readToEnd,
   write,
 } from "./private/io.js";
-import { compressedFlag, Compression } from "./compression.js";
 import { compressionBrotli, compressionGzip } from "./compression.js";
 import { validateReadMaxBytesOption } from "./private/validate-read-max-bytes-option.js";
 import { connectErrorFromNodeReason } from "./private/node-error.js";
 import { compressionNegotiate } from "./private/compression-negotiate.js";
-
-const headerUnaryEncoding = "Content-Encoding";
-const headerStreamEncoding = "Connect-Content-Encoding";
-const headerUnaryAcceptEncoding = "Accept-Encoding";
-const headerStreamAcceptEncoding = "Connect-Accept-Encoding";
-const headerContentType = "Content-Type";
 
 /**
  * Options for creating a Connect Protocol instance.
@@ -80,17 +83,14 @@ interface CreateConnectProtocolOptions {
   requireConnectProtocolHeader?: boolean;
 }
 
-const connectProtocolVersionHeader = "Connect-Protocol-Version";
-const connectProtocolVersion = "1";
-const connectTimeoutHeader = "Connect-Timeout-Ms";
-
 /**
  * Create a Connect Protocol instance.
  */
 export function createConnectProtocol(
   options: CreateConnectProtocolOptions
 ): Protocol {
-  const shouldRequireHeader = options.requireConnectProtocolHeader ?? false;
+  const requireConnectProtocolHeader =
+    options.requireConnectProtocolHeader ?? false;
   const readMaxBytes = validateReadMaxBytesOption(options.readMaxBytes);
   const compressMinBytes = options.compressMinBytes ?? 0;
   const acceptCompression = options.acceptCompression ?? [
@@ -98,7 +98,7 @@ export function createConnectProtocol(
     compressionBrotli,
   ];
   return {
-    supportsMediaType: (type) => !!connectParseContentType(type),
+    supportsMediaType: (type) => !!parseContentType(type),
 
     createHandler<I extends Message<I>, O extends Message<O>>(
       spec: ImplSpec<I, O>
@@ -107,10 +107,7 @@ export function createConnectProtocol(
         case MethodKind.Unary:
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = connectParseContentType(
-              requestHeader.get(headerContentType)
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -127,21 +124,20 @@ export function createConnectProtocol(
             }
 
             if (
-              shouldRequireHeader &&
-              req.headers[connectProtocolVersionHeader] !==
-                connectProtocolVersion
+              requireConnectProtocolHeader &&
+              requestHeader.get(headerProtocolVersion) !== protocolVersion
             ) {
               return await endWithHttpStatus(
                 res,
                 400,
-                `Missing required header Connect-Protocol-Version ${connectProtocolVersion}`
+                `Missing required header Connect-Protocol-Version ${protocolVersion}`
               );
             }
 
             const context: HandlerContext = {
               method: spec.method,
               service: spec.service,
-              requestHeader: requestHeader,
+              requestHeader,
               responseHeader: connectCreateResponseHeader(
                 spec.method.kind,
                 type.binary
@@ -149,10 +145,7 @@ export function createConnectProtocol(
               responseTrailer: new Headers(),
             };
 
-            const timeout = connectParseTimeout(
-              requestHeader.get(connectTimeoutHeader)
-            );
-
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithConnectUnaryError(
                 res,
@@ -163,7 +156,6 @@ export function createConnectProtocol(
                 compressMinBytes
               );
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithConnectUnaryError(
@@ -232,9 +224,13 @@ export function createConnectProtocol(
               } else if (connectErrorFromNodeReason(e).code == Code.Canceled) {
                 ce = new ConnectError("operation canceled", Code.Canceled);
               } else {
-                // TODO(TCN-785) We want to elide the error message for the client, but still
-                //    make it available for logging. We may have to add a "cause" property.
-                ce = new ConnectError("internal error", Code.Internal);
+                ce = new ConnectError(
+                  "internal error",
+                  Code.Internal,
+                  undefined,
+                  undefined,
+                  e
+                );
               }
               return await endWithConnectUnaryError(
                 res,
@@ -259,10 +255,7 @@ export function createConnectProtocol(
             res.writeHead(
               200,
               webHeaderToNodeHeaders(
-                connectTrailerMux(
-                  context.responseHeader,
-                  context.responseTrailer
-                )
+                trailerMux(context.responseHeader, context.responseTrailer)
               )
             );
             await write(res, responseBody);
@@ -271,10 +264,7 @@ export function createConnectProtocol(
         case MethodKind.ServerStreaming: {
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = connectParseContentType(
-              requestHeader.get(headerContentType)
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -302,21 +292,17 @@ export function createConnectProtocol(
             };
 
             if (
-              shouldRequireHeader &&
-              req.headers[connectProtocolVersionHeader] !==
-                connectProtocolVersion
+              requireConnectProtocolHeader &&
+              requestHeader.get(headerProtocolVersion) !== protocolVersion
             ) {
               return await endWithHttpStatus(
                 res,
                 400,
-                `Missing required header Connect-Protocol-Version ${connectProtocolVersion}`
+                `Missing required header Connect-Protocol-Version ${protocolVersion}`
               );
             }
 
-            const timeout = connectParseTimeout(
-              requestHeader.get(connectTimeoutHeader)
-            );
-
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithConnectEndStream(
                 res,
@@ -327,7 +313,6 @@ export function createConnectProtocol(
                 compressMinBytes
               );
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithConnectEndStream(
@@ -442,10 +427,7 @@ export function createConnectProtocol(
         case MethodKind.ClientStreaming: {
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = connectParseContentType(
-              requestHeader.get(headerContentType)
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -462,21 +444,20 @@ export function createConnectProtocol(
             }
 
             if (
-              shouldRequireHeader &&
-              req.headers[connectProtocolVersionHeader] !==
-                connectProtocolVersion
+              requireConnectProtocolHeader &&
+              requestHeader.get(headerProtocolVersion) !== protocolVersion
             ) {
               return await endWithHttpStatus(
                 res,
                 400,
-                `Missing required header Connect-Protocol-Version ${connectProtocolVersion}`
+                `Missing required header Connect-Protocol-Version ${protocolVersion}`
               );
             }
 
             const context: HandlerContext = {
               method: spec.method,
               service: spec.service,
-              requestHeader: nodeHeaderToWebHeader(req.headers),
+              requestHeader,
               responseHeader: connectCreateResponseHeader(
                 spec.method.kind,
                 type.binary
@@ -484,10 +465,7 @@ export function createConnectProtocol(
               responseTrailer: new Headers(),
             };
 
-            const timeout = connectParseTimeout(
-              requestHeader.get(connectTimeoutHeader)
-            );
-
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithConnectEndStream(
                 res,
@@ -498,7 +476,6 @@ export function createConnectProtocol(
                 compressMinBytes
               );
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithConnectEndStream(
@@ -607,10 +584,7 @@ export function createConnectProtocol(
         case MethodKind.BiDiStreaming: {
           return async (req, res) => {
             const requestHeader = nodeHeaderToWebHeader(req.headers);
-            const type = connectParseContentType(
-              requestHeader.get(headerContentType)
-            );
-
+            const type = parseContentType(requestHeader.get(headerContentType));
             if (type === undefined) {
               return await endWithHttpStatus(
                 res,
@@ -627,21 +601,20 @@ export function createConnectProtocol(
             }
 
             if (
-              shouldRequireHeader &&
-              req.headers[connectProtocolVersionHeader] !==
-                connectProtocolVersion
+              requireConnectProtocolHeader &&
+              requestHeader.get(headerProtocolVersion) !== protocolVersion
             ) {
               return await endWithHttpStatus(
                 res,
                 400,
-                `Missing required header Connect-Protocol-Version ${connectProtocolVersion}`
+                `Missing required header Connect-Protocol-Version ${protocolVersion}`
               );
             }
 
             const context: HandlerContext = {
               method: spec.method,
               service: spec.service,
-              requestHeader: nodeHeaderToWebHeader(req.headers),
+              requestHeader,
               responseHeader: connectCreateResponseHeader(
                 spec.method.kind,
                 type.binary
@@ -649,10 +622,7 @@ export function createConnectProtocol(
               responseTrailer: new Headers(),
             };
 
-            const timeout = connectParseTimeout(
-              requestHeader.get(connectTimeoutHeader)
-            );
-
+            const timeout = parseTimeout(requestHeader.get(headerTimeout));
             if (timeout instanceof ConnectError) {
               return await endWithConnectEndStream(
                 res,
@@ -663,7 +633,6 @@ export function createConnectProtocol(
                 compressMinBytes
               );
             }
-
             if (typeof timeout === "number") {
               res.setTimeout(timeout, () => {
                 return void endWithConnectEndStream(
@@ -804,13 +773,13 @@ async function endWithConnectEndStream(
   if (!res.headersSent) {
     res.writeHead(200, webHeaderToNodeHeaders(context.responseHeader));
   }
-  const endStreamJson = connectEndStreamToJson(
+  const endStreamJson = endStreamToJson(
     context.responseTrailer,
     error,
     jsonWriteOptions
   );
   let data = jsonSerialize(endStreamJson);
-  let flags = connectEndStreamFlag;
+  let flags = endStreamFlag;
   if (responseCompression && data.length >= compressMinBytes) {
     data = await responseCompression.compress(data);
     flags = flags | compressedFlag;
@@ -828,17 +797,17 @@ async function endWithConnectUnaryError(
   compressMinBytes: number
 ): Promise<void> {
   const header = appendHeaders(
-    connectTrailerMux(context.responseHeader, context.responseTrailer),
+    trailerMux(context.responseHeader, context.responseTrailer),
     error.metadata
   );
   header.set(headerContentType, "application/json");
-  const json = connectErrorToJson(error, jsonWriteOptions);
+  const json = errorToJson(error, jsonWriteOptions);
   let body = jsonSerialize(json);
   if (responseCompression && body.length >= compressMinBytes) {
     body = await responseCompression.compress(body);
     header.set(headerUnaryEncoding, responseCompression.name);
   }
-  const statusCode = connectCodeToHttpStatus(error.code);
+  const statusCode = codeToHttpStatus(error.code);
   res.writeHead(statusCode, webHeaderToNodeHeaders(header));
   await write(res, body);
   await end(res);

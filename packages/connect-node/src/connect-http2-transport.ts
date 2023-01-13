@@ -15,6 +15,8 @@
 import {
   appendHeaders,
   Code,
+  compressedFlag,
+  Compression,
   ConnectError,
   createClientMethodSerializers,
   createMethodUrl,
@@ -29,12 +31,13 @@ import {
   UnaryResponse,
 } from "@bufbuild/connect-core";
 import {
-  connectCreateRequestHeader,
-  connectEndStreamFlag,
-  connectEndStreamFromJson,
-  connectErrorFromJson,
-  connectTrailerDemux,
-  connectValidateResponse,
+  createRequestHeaderWithCompression,
+  endStreamFlag,
+  endStreamFromJson,
+  errorFromJson,
+  trailerDemux,
+  headerUnaryEncoding,
+  validateResponseWithCompression,
 } from "@bufbuild/connect-core/protocol-connect";
 import type {
   AnyMessage,
@@ -47,7 +50,6 @@ import type {
   PartialMessage,
   ServiceType,
 } from "@bufbuild/protobuf";
-import { MethodKind } from "@bufbuild/protobuf";
 import type { ReadableStreamReadResultLike } from "./lib.dom.streams.js";
 import * as http2 from "http2";
 import { webHeaderToNodeHeaders } from "./private/web-header-to-node-headers.js";
@@ -61,11 +63,8 @@ import {
   write,
 } from "./private/io.js";
 import { connectErrorFromNodeReason } from "./private/node-error.js";
-import { compressedFlag, Compression } from "./compression.js";
 import { compressionBrotli, compressionGzip } from "./compression.js";
 import { validateReadMaxBytesOption } from "./private/validate-read-max-bytes-option.js";
-
-const messageFlag = 0b00000000;
 
 /**
  * Options used to configure the Connect transport.
@@ -155,13 +154,13 @@ export function createConnectHttp2Transport(
             method,
             url: createMethodUrl(options.baseUrl, service, method),
             init: {},
-            header: connectCreateRequestHeaderWithCompression(
+            header: createRequestHeaderWithCompression(
               method.kind,
               useBinaryFormat,
               timeoutMs,
               header,
-              acceptCompression.map((c) => c.name),
-              options.sendCompression?.name
+              acceptCompression,
+              options.sendCompression
             ),
             message: normalize(message),
             signal: signal ?? new AbortController().signal,
@@ -188,9 +187,10 @@ export function createConnectHttp2Transport(
               requestBody.length >= compressMinBytes
             ) {
               requestBody = await options.sendCompression.compress(requestBody);
-              req.header.set("Content-Encoding", options.sendCompression.name);
             } else {
-              req.header.delete("Content-Encoding");
+              // We did not apply compression, so we have to remove the Content-Encoding
+              // header that may have been set.
+              req.header.delete(headerUnaryEncoding);
             }
 
             const stream = session.request(
@@ -208,7 +208,7 @@ export function createConnectHttp2Transport(
             await end(stream);
             const [responseStatus, responseHeader] = await headerPromise;
             const { compression, isConnectUnaryError } =
-              connectValidateResponseWithCompression(
+              validateResponseWithCompression(
                 method.kind,
                 useBinaryFormat,
                 acceptCompression,
@@ -223,13 +223,13 @@ export function createConnectHttp2Transport(
               );
             }
             if (isConnectUnaryError) {
-              throw connectErrorFromJson(
+              throw errorFromJson(
                 jsonParse(responseBody),
-                appendHeaders(...connectTrailerDemux(responseHeader))
+                appendHeaders(...trailerDemux(responseHeader))
               );
             }
             const responseMessage = parse(responseBody);
-            const [header, trailer] = connectTrailerDemux(responseHeader);
+            const [header, trailer] = trailerDemux(responseHeader);
             return <UnaryResponse<O>>{
               stream: false,
               service,
@@ -274,13 +274,13 @@ export function createConnectHttp2Transport(
             mode: "cors",
           },
           signal: signal ?? new AbortController().signal,
-          header: connectCreateRequestHeaderWithCompression(
+          header: createRequestHeaderWithCompression(
             method.kind,
             useBinaryFormat,
             timeoutMs,
             header,
-            acceptCompression.map((c) => c.name),
-            options.sendCompression?.name
+            acceptCompression,
+            options.sendCompression
           ),
         },
         async (req: StreamingRequest<I, O>) => {
@@ -322,10 +322,10 @@ export function createConnectHttp2Transport(
                     "cannot send, stream is already closed"
                   );
                 }
-                let flags = messageFlag;
+                let flags = 0;
                 let body = serialize(normalize(message));
                 if (
-                  options.sendCompression &&
+                  options.sendCompression !== undefined &&
                   body.length >= compressMinBytes
                 ) {
                   flags = flags | compressedFlag;
@@ -349,7 +349,7 @@ export function createConnectHttp2Transport(
               },
               async read(): Promise<ReadableStreamReadResultLike<O>> {
                 const [responseStatus, responseHeader] = await headersPromise;
-                const { compression } = connectValidateResponseWithCompression(
+                const { compression } = validateResponseWithCompression(
                   method.kind,
                   useBinaryFormat,
                   acceptCompression,
@@ -377,9 +377,9 @@ export function createConnectHttp2Transport(
                     }
                     data = await compression.decompress(data, readMaxBytes);
                   }
-                  if ((flags & connectEndStreamFlag) === connectEndStreamFlag) {
+                  if ((flags & endStreamFlag) === endStreamFlag) {
                     endStreamReceived = true;
-                    const endStream = connectEndStreamFromJson(data);
+                    const endStream = endStreamFromJson(data);
                     responseTrailer.resolve(endStream.metadata);
                     if (endStream.error) {
                       throw endStream.error;
@@ -405,60 +405,5 @@ export function createConnectHttp2Transport(
         options.interceptors
       );
     },
-  };
-}
-
-export function connectCreateRequestHeaderWithCompression(
-  methodKind: MethodKind,
-  useBinaryFormat: boolean,
-  timeoutMs: number | undefined,
-  userProvidedHeaders: HeadersInit | undefined,
-  acceptCompression: string[],
-  sendCompression: string | undefined
-): Headers {
-  const result = connectCreateRequestHeader(
-    methodKind,
-    useBinaryFormat,
-    timeoutMs,
-    userProvidedHeaders
-  );
-  let acceptEncodingField = "Accept-Encoding";
-  if (methodKind != MethodKind.Unary) {
-    acceptEncodingField = "Connect-" + acceptEncodingField;
-    if (sendCompression != undefined) {
-      result.set("Connect-Content-Encoding", sendCompression);
-    }
-  }
-  if (acceptCompression.length > 0) {
-    result.set(acceptEncodingField, acceptCompression.join(","));
-  }
-  return result;
-}
-
-export function connectValidateResponseWithCompression(
-  methodKind: MethodKind,
-  useBinaryFormat: boolean,
-  acceptCompression: Compression[],
-  status: number,
-  headers: Headers
-): { compression: Compression | undefined; isConnectUnaryError: boolean } {
-  let compression: Compression | undefined;
-  const encodingField =
-    methodKind == MethodKind.Unary
-      ? "Content-Encoding"
-      : "Connect-Content-Encoding";
-  const encoding = headers.get(encodingField);
-  if (encoding != null && encoding.toLowerCase() !== "identity") {
-    compression = acceptCompression.find((c) => c.name === encoding);
-    if (!compression) {
-      throw new ConnectError(
-        `unsupported response encoding "${encoding}"`,
-        Code.InvalidArgument
-      );
-    }
-  }
-  return {
-    compression,
-    ...connectValidateResponse(methodKind, useBinaryFormat, status, headers),
   };
 }

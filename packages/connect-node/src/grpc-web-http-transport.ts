@@ -26,11 +26,16 @@ import {
   UnaryRequest,
   UnaryResponse,
   Code,
+  Compression,
+  compressedFlag,
 } from "@bufbuild/connect-core";
-import { grpcValidateTrailer } from "@bufbuild/connect-core/protocol-grpc";
+import { validateTrailer } from "@bufbuild/connect-core/protocol-grpc";
 import {
-  grpcWebTrailerParse,
-  grpcWebTrailerFlag,
+  createRequestHeaderWithCompression,
+  headerEncoding,
+  trailerParse,
+  trailerFlag,
+  validateResponseWithCompression,
 } from "@bufbuild/connect-core/protocol-grpc-web";
 import type {
   AnyMessage,
@@ -43,28 +48,17 @@ import type {
   PartialMessage,
   ServiceType,
 } from "@bufbuild/protobuf";
-import * as http from "http";
-import * as https from "https";
-import {
-  nodeHeaderToWebHeader,
-  webHeaderToNodeHeaders,
-} from "./private/web-header-to-node-headers.js";
+import type * as http from "http";
+import type * as https from "https";
+import { nodeHeaderToWebHeader } from "./private/web-header-to-node-headers.js";
 import { connectErrorFromNodeReason } from "./private/node-error.js";
 import { end, readEnvelope, write } from "./private/io.js";
 import { assert } from "./private/assert.js";
 import { defer } from "./private/defer.js";
 import type { ReadableStreamReadResultLike } from "./lib.dom.streams.js";
-import {
-  compressedFlag,
-  Compression,
-  compressionBrotli,
-  compressionGzip,
-} from "./compression.js";
+import { compressionBrotli, compressionGzip } from "./compression.js";
 import { validateReadMaxBytesOption } from "./private/validate-read-max-bytes-option.js";
-import {
-  grpcWebCreateRequestHeaderWithCompression,
-  grpcWebValidateResponseWithCompression,
-} from "./grpc-web-http2-transport.js";
+import { getNodeRequest, makeNodeRequest } from "./private/node-request.js";
 
 export interface GrpcWebHttpTransportOptions {
   /**
@@ -104,7 +98,9 @@ export interface GrpcWebHttpTransportOptions {
   /**
    * Options for the http request.
    */
-  httpOptions?: http.RequestOptions | https.RequestOptions;
+  httpOptions?:
+    | Omit<http.RequestOptions, "signal">
+    | Omit<https.RequestOptions, "signal">;
 
   // TODO document
   acceptCompression?: Compression[];
@@ -112,17 +108,6 @@ export interface GrpcWebHttpTransportOptions {
   compressMinBytes?: number;
   readMaxBytes?: number;
   sendMaxBytes?: number;
-}
-
-interface NodeRequestOptions<
-  I extends Message<I> = AnyMessage,
-  O extends Message<O> = AnyMessage
-> extends Pick<GrpcWebHttpTransportOptions, "httpOptions"> {
-  // Unary Request
-  req: UnaryRequest<I>;
-
-  // Request body
-  payload: Uint8Array;
 }
 
 /**
@@ -166,13 +151,12 @@ export function createGrpcWebHttpTransport(
             method,
             url: createMethodUrl(options.baseUrl, service, method),
             init: {},
-            header: grpcWebCreateRequestHeaderWithCompression(
-              method.kind,
+            header: createRequestHeaderWithCompression(
               useBinaryFormat,
               timeoutMs,
               header,
-              acceptCompression.map((c) => c.name),
-              options.sendCompression?.name
+              acceptCompression,
+              options.sendCompression
             ),
             message: normalize(message),
             signal: signal ?? new AbortController().signal,
@@ -188,9 +172,8 @@ export function createGrpcWebHttpTransport(
             ) {
               body = await options.sendCompression.compress(body);
               flag = compressedFlag;
-              req.header.set("Grpc-Encoding", options.sendCompression.name);
             } else {
-              req.header.delete("Grpc-Encoding");
+              req.header.delete(String(headerEncoding));
             }
 
             const envelope = encodeEnvelope(flag, body);
@@ -205,7 +188,7 @@ export function createGrpcWebHttpTransport(
               typeof response.statusCode == "number",
               "http1 client response is missing status code"
             );
-            const { compression } = grpcWebValidateResponseWithCompression(
+            const { compression } = validateResponseWithCompression(
               useBinaryFormat,
               acceptCompression,
               response.statusCode,
@@ -234,13 +217,13 @@ export function createGrpcWebHttpTransport(
             }
 
             if (
-              (messageOrTrailerResult.value.flags & grpcWebTrailerFlag) ===
-              grpcWebTrailerFlag
+              (messageOrTrailerResult.value.flags & trailerFlag) ===
+              trailerFlag
             ) {
               // Unary responses require exactly one response message, but in
               // case of an error, it is perfectly valid to have a response body
               // that only contains error trailers.
-              grpcValidateTrailer(grpcWebTrailerParse(messageOrTrailerData));
+              validateTrailer(trailerParse(messageOrTrailerData));
               // At this point, we received trailers only, but the trailers did
               // not have an error status code.
               throw "unexpected trailer";
@@ -267,8 +250,8 @@ export function createGrpcWebHttpTransport(
               );
             }
 
-            const trailer = grpcWebTrailerParse(trailerResultData);
-            grpcValidateTrailer(trailer);
+            const trailer = trailerParse(trailerResultData);
+            validateTrailer(trailer);
 
             const eofResult = await readEnvelope(response);
             if (!eofResult.done) {
@@ -318,32 +301,20 @@ export function createGrpcWebHttpTransport(
             mode: "cors",
           },
           signal: signal ?? new AbortController().signal,
-          header: grpcWebCreateRequestHeaderWithCompression(
-            method.kind,
+          header: createRequestHeaderWithCompression(
             useBinaryFormat,
             timeoutMs,
             header,
-            acceptCompression.map((c) => c.name),
-            options.sendCompression?.name
+            acceptCompression,
+            options.sendCompression
           ),
         },
         async (req: StreamingRequest<I, O>) => {
           try {
-            const endpoint = new URL(req.url);
-            const nodeRequestFn = nodeRequest(endpoint.protocol);
-            const stream = nodeRequestFn(req.url, {
-              headers: webHeaderToNodeHeaders(req.header),
-              method: "POST",
-              path: endpoint.pathname,
-              signal: req.signal,
-              ...options.httpOptions,
-            });
+            const stream = await getNodeRequest(req, options.httpOptions);
             const responsePromise = new Promise<http.IncomingMessage>(
-              (resolve, reject) => {
-                stream.on("response", (res) => {
-                  resolve(res);
-                });
-                stream.on("error", reject);
+              (resolve) => {
+                stream.on("response", (res) => resolve(res));
               }
             );
             let endStreamReceived = false;
@@ -367,7 +338,7 @@ export function createGrpcWebHttpTransport(
                 let flags = 0;
                 let body = serialize(normalize(message));
                 if (
-                  options.sendCompression &&
+                  options.sendCompression !== undefined &&
                   body.length >= compressMinBytes
                 ) {
                   flags = flags | compressedFlag;
@@ -397,7 +368,7 @@ export function createGrpcWebHttpTransport(
                   typeof response.statusCode == "number",
                   "http1 client response is missing status code"
                 );
-                const { compression } = grpcWebValidateResponseWithCompression(
+                const { compression } = validateResponseWithCompression(
                   useBinaryFormat,
                   acceptCompression,
                   response.statusCode,
@@ -429,10 +400,10 @@ export function createGrpcWebHttpTransport(
                     data = await compression.decompress(data, readMaxBytes);
                   }
 
-                  if ((flags & grpcWebTrailerFlag) === grpcWebTrailerFlag) {
+                  if ((flags & trailerFlag) === trailerFlag) {
                     endStreamReceived = true;
-                    const trailer = grpcWebTrailerParse(data);
-                    grpcValidateTrailer(trailer);
+                    const trailer = trailerParse(data);
+                    validateTrailer(trailer);
                     responseTrailer.resolve(trailer);
                     return {
                       done: true,
@@ -449,7 +420,7 @@ export function createGrpcWebHttpTransport(
                 }
               },
             };
-            return Promise.resolve(conn);
+            return conn;
           } catch (e) {
             throw connectErrorFromNodeReason(e);
           }
@@ -458,36 +429,4 @@ export function createGrpcWebHttpTransport(
       );
     },
   };
-}
-
-function makeNodeRequest(options: NodeRequestOptions) {
-  return new Promise<http.IncomingMessage>((resolve, reject) => {
-    const endpoint = new URL(options.req.url);
-    const nodeRequestFn = nodeRequest(endpoint.protocol);
-    const request = nodeRequestFn(options.req.url, {
-      headers: webHeaderToNodeHeaders(options.req.header),
-      method: "POST",
-      path: endpoint.pathname,
-      signal: options.req.signal,
-      ...options.httpOptions,
-    });
-
-    request.on("error", (err) => {
-      reject(err);
-    });
-
-    request.on("response", (res) => {
-      return resolve(res);
-    });
-
-    request.write(options.payload);
-    request.end();
-  });
-}
-
-function nodeRequest(protocol: string) {
-  if (protocol.startsWith("http") || protocol.startsWith("https")) {
-    return protocol.includes("https") ? https.request : http.request;
-  }
-  throw new Error("Unsupported protocol");
 }
