@@ -82,6 +82,8 @@ export function getNodeRequest(
       path: endpoint.pathname,
       signal: req.signal,
     });
+
+    request.once("error", reject);
     request.once("socket", (socket) => {
       socket.once("connect", resolveRequest);
       socket.once("error", reject);
