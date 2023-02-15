@@ -24,7 +24,8 @@ const rl = readline.createInterface(stdin, stdout);
 
 void (async () => {
   const transport = createConnectTransport({
-    httpVersion: "1.1",
+    // httpVersion: "1.1",
+    httpVersion: "2",
     baseUrl: "http://localhost:8080",
   });
 
