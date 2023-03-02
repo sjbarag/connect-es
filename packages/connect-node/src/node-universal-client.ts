@@ -165,21 +165,35 @@ function h1Request(
   if (new URL(url).protocol.startsWith("https")) {
     request = https.request(url, options);
   } else {
+    options.headers = {
+      ...options.headers,
+      Connection: "close",
+    };
     request = http.request(url, options);
   }
-  request.on("error", sentinel.reject);
+  request.on("error", (err) => {
+    console.log("request error ", err);
+    sentinel.reject(err);
+  });
   request.on("abort", () =>
     sentinel.reject(new ConnectError("node request aborted", Code.Aborted))
   );
   request.on("socket", function onRequestSocket(socket: net.Socket) {
-    socket.on("error", sentinel.reject);
-    socket.on("timeout", () =>
-      sentinel.reject(new ConnectError("node socket timed out", Code.Aborted))
-    );
+    console.log("socket to me");
+    socket.on("close", () => console.log("closing"));
+    socket.on("error", (err) => {
+      console.log("err ", err);
+      sentinel.reject(err);
+    });
+    socket.on("timeout", (err: any) => {
+      console.log("to ", err);
+      sentinel.reject(new ConnectError("node socket timed out", Code.Aborted));
+    });
     request.off("socket", onRequestSocket);
     socket.on("connect", onSocketConnect);
 
     function onSocketConnect() {
+      console.log("connected the socket");
       socket.off("connect", onSocketConnect);
       onRequest(request);
     }

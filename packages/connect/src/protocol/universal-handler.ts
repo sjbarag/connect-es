@@ -155,17 +155,16 @@ function negotiateProtocol(
   protocolHandlers: UniversalHandler[]
 ): UniversalHandler {
   async function protocolNegotiatingHandler(request: UniversalServerRequest) {
-    if (
-      method.kind == MethodKind.BiDiStreaming &&
-      request.httpVersion.startsWith("1.")
-    ) {
-      return {
-        ...uResponseVersionNotSupported,
-        // Clients coded to expect full-duplex connections may hang if they've
-        // mistakenly negotiated HTTP/1.1. To unblock them, we must close the
-        // underlying TCP connection.
-        header: new Headers({ Connection: "close" }),
-      };
+    if (request.httpVersion.startsWith("1.")) {
+      if (method.kind == MethodKind.BiDiStreaming) {
+        return {
+          ...uResponseVersionNotSupported,
+          // Clients coded to expect full-duplex connections may hang if they've
+          // mistakenly negotiated HTTP/1.1. To unblock them, we must close the
+          // underlying TCP connection.
+          header: new Headers({ Connection: "close" }),
+        };
+      }
     }
     const contentType = request.header.get("Content-Type") ?? "";
     const firstMatch = protocolHandlers

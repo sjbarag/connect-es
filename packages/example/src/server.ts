@@ -21,7 +21,7 @@ import type {
   ConverseRequest,
 } from "./gen/eliza_pb.js";
 import * as esbuild from "esbuild";
-import http2 from "http2";
+import http from "http";
 import { readFileSync } from "fs";
 import { stdout } from "process";
 
@@ -94,23 +94,10 @@ const handler = connectNodeAdapter({
   },
 });
 
-http2
-  .createSecureServer(
-    {
-      // We configure the server to use the locally-trusted development certificate
-      // we have created with mkcert:
-      key: readFileSync("localhost+2-key.pem", "utf8"),
-      cert: readFileSync("localhost+2.pem", "utf8"),
-      // Because we are using a certificate, we can use ALPN to offer both HTTP 1.1
-      // and HTTP/2 on the same port.
-      allowHTTP1: true,
-    },
-    handler
-  )
-  .listen(8443, () => {
-    stdout.write("The server is listening on https://localhost:8443\n");
-    stdout.write("Run `npm run client` for a terminal client.\n");
-  });
+http.createServer(handler).listen(3000, () => {
+  stdout.write("The server is listening on https://localhost:3000\n");
+  stdout.write("Run `npm run client` for a terminal client.\n");
+});
 
 // If you don't need gRPC and TLS, you can also use plain-text HTTP 1.1.
 // Start your server with: http.createServer(handler).listen(8080)
