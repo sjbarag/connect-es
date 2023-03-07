@@ -29,6 +29,7 @@ import { stdout } from "process";
 function routes(router: ConnectRouter) {
   router.service(ElizaService, {
     say(req: SayRequest) {
+      console.log("saaaay");
       return {
         sentence: `You said ${req.sentence}`,
       };
@@ -43,6 +44,8 @@ function routes(router: ConnectRouter) {
       yield { sentence: `I'm a Rogerian psychotherapist.` };
       await delay(150);
       yield { sentence: `How are you feeling today?` };
+      console.log("introduce is done");
+      return;
     },
     async *converse(reqs: AsyncIterable<ConverseRequest>) {
       for await (const req of reqs) {
@@ -63,6 +66,7 @@ const handler = connectNodeAdapter({
   // If none of the RPC routes match, this handler is called.
   // We serve our web interface here:
   fallback(req, res) {
+    console.log("Fallback");
     switch (req.url) {
       case "/":
         res.writeHead(200, { "content-type": "text/html" });
