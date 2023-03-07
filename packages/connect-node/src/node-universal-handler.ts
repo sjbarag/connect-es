@@ -139,6 +139,7 @@ export async function universalResponseToNodeResponse(
       }
     }
   }
+  console.log("now to the response ending...");
   if (!nodeResponse.headersSent) {
     nodeResponse.writeHead(
       universalResponse.status,
@@ -153,6 +154,7 @@ export async function universalResponseToNodeResponse(
     // The npm package "compression" crashes when a callback is passed to end()
     // https://github.com/expressjs/compression/blob/ad5113b98cafe1382a0ece30bb4673707ac59ce7/index.js#L115
     nodeResponse.once("end", resolve);
+    console.log("ending it yo");
     nodeResponse.end();
   });
 }

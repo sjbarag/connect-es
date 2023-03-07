@@ -56,11 +56,14 @@ export function createNodeHttp1Client(
         reject(e);
       });
 
+      console.log(httpOptions);
+
       h1Request(
         sentinel,
         req.url,
         {
           ...httpOptions,
+          // agent: false,
           headers: webHeaderToNodeHeaders(req.header),
           method: req.method,
           signal: req.signal,
@@ -165,10 +168,6 @@ function h1Request(
   if (new URL(url).protocol.startsWith("https")) {
     request = https.request(url, options);
   } else {
-    // options.headers = {
-    //   ...options.headers,
-    //   Connection: "close",
-    // };
     request = http.request(url, options);
   }
   request.on("error", (err) => {
@@ -179,14 +178,21 @@ function h1Request(
     sentinel.reject(new ConnectError("node request aborted", Code.Aborted))
   );
   request.on("socket", function onRequestSocket(socket: net.Socket) {
-    console.log("socket to me");
+    console.log("Socket event fired on request");
+    console.log(`Local: ${socket.localAddress}:${socket.localPort}`);
+    console.log(`Remote: ${socket.remoteAddress}:${socket.remotePort}`);
+    console.log(`Ready State: ${socket.readyState}`);
+    console.log(`Connecting: ${socket.connecting}`);
+    console.log(`Pending: ${socket.pending}`);
+    console.log(`Destroyed: ${socket.destroyed}`);
+
     socket.on("close", () => console.log("closing"));
     socket.on("error", (err) => {
       console.log("err ", err);
       sentinel.reject(err);
     });
     socket.on("timeout", (err: any) => {
-      console.log("to ", err);
+      console.log("Socket Timeout: ", err);
       sentinel.reject(new ConnectError("node socket timed out", Code.Aborted));
     });
     request.off("socket", onRequestSocket);
@@ -211,12 +217,14 @@ function sinkRequest(
       writeNext();
 
       function writeNext() {
+        console.log("write next, run anywhere");
         if (sentinel.isRejected()) {
           return;
         }
         it.next().then(
           (r) => {
             if (r.done === true) {
+              console.log("Ending the requst");
               request.end(resolve);
               return;
             }

@@ -82,12 +82,14 @@ export function connectNodeAdapter(
     req: NodeServerRequest,
     res: NodeServerResponse
   ): void {
+    console.log("node adapter handler firing");
     const uHandler = paths.get(req.url ?? "");
     if (!uHandler) {
       (options.fallback ?? fallback)(req, res);
       return;
     }
     const uReq = universalRequestFromNodeRequest(req, undefined);
+    console.log("uReq");
     uHandler(uReq)
       .then((uRes) => universalResponseToNodeResponse(uRes, res))
       .catch((reason) => {
@@ -104,6 +106,7 @@ export function connectNodeAdapter(
 }
 
 const fallback: NodeHandlerFn = (request, response) => {
+  console.log("Falling back");
   response.writeHead(uResponseNotFound.status);
   response.end();
 };
