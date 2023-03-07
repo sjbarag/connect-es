@@ -56,13 +56,12 @@ export function createNodeHttp1Client(
         reject(e);
       });
 
-      console.log(httpOptions);
-
       h1Request(
         sentinel,
         req.url,
         {
           ...httpOptions,
+          // uncomment this to see the failure
           // agent: false,
           headers: webHeaderToNodeHeaders(req.header),
           method: req.method,
@@ -186,9 +185,9 @@ function h1Request(
     console.log(`Pending: ${socket.pending}`);
     console.log(`Destroyed: ${socket.destroyed}`);
 
-    socket.on("close", () => console.log("closing"));
+    socket.on("close", () => console.log("Closing Socket"));
     socket.on("error", (err) => {
-      console.log("err ", err);
+      console.log("Socket Error:  ", err);
       sentinel.reject(err);
     });
     socket.on("timeout", (err: any) => {
@@ -199,7 +198,7 @@ function h1Request(
     socket.on("connect", onSocketConnect);
 
     function onSocketConnect() {
-      console.log("connected the socket");
+      console.log("Socket Connected Successfully");
       socket.off("connect", onSocketConnect);
       onRequest(request);
     }
@@ -217,9 +216,7 @@ function sinkRequest(
       writeNext();
 
       function writeNext() {
-        console.log("write next, run anywhere");
         if (sentinel.isRejected()) {
-          console.log("sentinel rejected");
           return;
         }
         it.next().then(
@@ -247,18 +244,15 @@ function sinkRequest(
                   ).catch(() => {
                     //
                   });
-                  console.log("returning 1k");
                   return;
                 }
                 sentinel.reject(e);
               } else {
-                console.log("write next in the iterator");
                 writeNext();
               }
             });
           },
           (e) => {
-            console.log("rejecting 1k");
             sentinel.reject(e);
           }
         );

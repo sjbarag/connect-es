@@ -26,7 +26,7 @@ const rl = readline.createInterface(stdin, stdout);
 // to use one of the other supported protocols.
 const transport = createConnectTransport({
   httpVersion: "1.1",
-  baseUrl: "http://localhost:3000",
+  baseUrl: "http://localhost:8080",
 });
 
 void (async () => {
@@ -38,6 +38,7 @@ void (async () => {
   //   rl.write(res.sentence + "\n");
   // }
 
+  // Just use unary for simplicity in testing
   for (;;) {
     const sentence = await rl.question("> ");
     const res = await client.say({ sentence });
