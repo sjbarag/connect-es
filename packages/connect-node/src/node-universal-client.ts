@@ -219,6 +219,7 @@ function sinkRequest(
       function writeNext() {
         console.log("write next, run anywhere");
         if (sentinel.isRejected()) {
+          console.log("sentinel rejected");
           return;
         }
         it.next().then(
@@ -246,15 +247,18 @@ function sinkRequest(
                   ).catch(() => {
                     //
                   });
+                  console.log("returning 1k");
                   return;
                 }
                 sentinel.reject(e);
               } else {
+                console.log("write next in the iterator");
                 writeNext();
               }
             });
           },
           (e) => {
+            console.log("rejecting 1k");
             sentinel.reject(e);
           }
         );
