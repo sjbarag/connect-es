@@ -165,10 +165,10 @@ function h1Request(
   if (new URL(url).protocol.startsWith("https")) {
     request = https.request(url, options);
   } else {
-    options.headers = {
-      ...options.headers,
-      Connection: "close",
-    };
+    // options.headers = {
+    //   ...options.headers,
+    //   Connection: "close",
+    // };
     request = http.request(url, options);
   }
   request.on("error", (err) => {
